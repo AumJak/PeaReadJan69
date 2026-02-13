@@ -18,19 +18,21 @@ def benchmark_api():
     
     # Warm up 3 รอบ
     for _ in range(3):
-        try: requests.post(API_URL, json=payload, timeout=5)
-        except: pass
+        try:
+            requests.post(API_URL, json=payload, timeout=5)
+        except Exception: # แก้ไข Line 22: ระบุ Exception class แทนการใช้ bare except
+            pass
 
     # Test จริง 20 รอบ
     start_time = time.time()
-    success_count = 0
+    # แก้ไข Line 26: ลบตัวแปร success_count ที่ไม่ได้ใช้ออก
     rounds = 20
     
-    for i in range(rounds):
+    # แก้ไข Line 29: เปลี่ยน i เป็น _ (Unused loop index)
+    for _ in range(rounds):
         try:
-            res = requests.post(API_URL, json=payload, timeout=10)
-            if res.status_code == 200:
-                success_count += 1
+            requests.post(API_URL, json=payload, timeout=10)
+            # ลบ Logic การนับ success_count ที่ไม่จำเป็นออก
         except Exception as e:
             print(f"Request Error: {e}")
 
@@ -41,7 +43,8 @@ def benchmark_api():
     fps = 1 / avg_time
 
     print("\n" + "="*40)
-    print(f"📊 ผลทดสอบความเร็ว API (End-to-End Latency)")
+    # แก้ไข Line 44: ลบ f หน้า string (Useless f-string)
+    print("📊 ผลทดสอบความเร็ว API (End-to-End Latency)")
     print("="*40)
     print(f"⏱️  เฉลี่ยต่อ 1 Request: {avg_time:.4f} วินาที")
     print(f"⚡  รองรับได้ประมาณ:     {fps:.2f} รูป/วินาที (RPS)")
