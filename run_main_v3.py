@@ -11,7 +11,7 @@ import datetime
 # --- ⚙️ ตั้งค่า (USER CONFIG) ---
 API_URL = "http://127.0.0.1:6000/predict"
 INPUT_FILE = "C3.csv"
-OUTPUT_FILE = "Sheet_C3_Complete.csv"
+OUTPUT_FILE = "Complete.csv"
 CACHE_FILE = "temp_progress.json"
 MAX_WORKERS = 5
 SAVE_INTERVAL = 100
