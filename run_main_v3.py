@@ -17,6 +17,12 @@ MAX_WORKERS = 5
 SAVE_INTERVAL = 100
 RETRY_DELAY = 10
 
+# --- 🔒 Constants (แก้ Issue Line 114) ---
+STATUS_NO_IMAGE = "No Image"
+STATUS_API_ERROR = "API Error"
+STATUS_SUCCESS = "Success"
+STATUS_FAILED = "Failed"
+
 # --- 🚀 ส่วนจูนความเร็ว (Connection Pooling) ---
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
@@ -29,50 +35,44 @@ session.mount('https://', adapter)
 
 # --- 🛠️ Utils Functions ---
 def load_cache():
-    """โหลดไฟล์ Cache โดยจัดการ Exception ให้ถูกต้องตาม SonarQube"""
+    """โหลดไฟล์ Cache"""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded = json.load(f)
                 return {int(k): v for k, v in loaded.items()}
         except (OSError, json.JSONDecodeError):
-            # Catch specific exceptions instead of bare 'except:'
             return {}
     return {}
 
 def save_cache(data):
-    """บันทึกไฟล์ Cache โดยจัดการ Exception ให้ถูกต้อง"""
+    """บันทึกไฟล์ Cache"""
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
     except OSError:
-        # Catch specific exception related to file I/O
         pass
 
 def format_time(seconds):
     return str(datetime.timedelta(seconds=int(seconds)))
 
 def _prepare_csv_row(row, url_columns, idx, results_map):
-    """Helper function: เตรียมข้อมูล 1 แถวเพื่อเขียนลง CSV (ลด Complexity)"""
+    """เตรียมข้อมูล 1 แถวเพื่อเขียนลง CSV"""
     new_row = row.copy()
     for col in url_columns:
-        # ดึงข้อมูลจาก results_map หรือใช้ค่า default
         res = results_map.get(idx, {}).get(col, {"pea_no": "", "status": "", "method": ""})
-        
         new_row[f"{col}_PEA"] = res["pea_no"]
         
-        # Logic การแสดงผล Status
         status_text = res["status"]
-        if status_text == "Success":
+        if status_text == STATUS_SUCCESS:
             status_text = res["method"]
         
         new_row[f"{col}_Status"] = status_text
     return new_row
 
 def save_output_csv(filename, headers, url_columns, rows_data, results_map):
-    """บันทึกไฟล์ CSV โดยเรียกใช้ Helper function"""
+    """บันทึกไฟล์ CSV"""
     new_headers = headers.copy()
-    
     for col in url_columns:
         new_headers.append(f"{col}_PEA")
         new_headers.append(f"{col}_Status")
@@ -81,17 +81,15 @@ def save_output_csv(filename, headers, url_columns, rows_data, results_map):
         with open(filename, mode='w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=new_headers)
             writer.writeheader()
-            
             for idx, row in enumerate(rows_data):
                 new_row = _prepare_csv_row(row, url_columns, idx, results_map)
                 writer.writerow(new_row)
-                
     except OSError as e:
         print(f"⚠️ บันทึกไฟล์ CSV ไม่สำเร็จ: {e}")
 
 # --- 🧠 Logic Functions ---
 def _parse_api_response(response):
-    """แกะผลลัพธ์จาก API (ลด Cognitive Complexity และแก้ Nested Conditional)"""
+    """แกะผลลัพธ์จาก API"""
     if response.status_code == 200:
         data = response.json()
         if data.get("status") == "success":
@@ -99,7 +97,6 @@ def _parse_api_response(response):
             pea_no = result_data.get("serial_number", "")
             read_method = result_data.get("method", "")
             
-            # แก้ไข Nested Conditional (Line 85 Issue)
             if read_method == "barcode":
                 method_display = "Barcode"
             elif read_method == "ocr":
@@ -107,26 +104,27 @@ def _parse_api_response(response):
             else:
                 method_display = read_method
                 
-            return pea_no, "Success", method_display
+            return pea_no, STATUS_SUCCESS, method_display
         else:
             msg = data.get("message", "Unknown")
             is_img_err = "download" in msg.lower() or "image" in msg.lower()
-            status = "No Image" if is_img_err else "Failed"
+            # ใช้ Constant แทน String Literal
+            status = STATUS_NO_IMAGE if is_img_err else STATUS_FAILED
             return "", status, msg
             
     elif response.status_code in [400, 404, 422]:
-        return "", "No Image", f"API {response.status_code}"
+        return "", STATUS_NO_IMAGE, f"API {response.status_code}"
     
-    return "", "API Error", f"HTTP {response.status_code}"
+    return "", STATUS_API_ERROR, f"HTTP {response.status_code}"
 
 def process_url_task(row_index, col_name, url):
     """ฟังก์ชันหลัก: ยิง API และ Retry"""
     if not url or not str(url).strip():
-        return row_index, col_name, "", "No Image", ""
+        return row_index, col_name, "", STATUS_NO_IMAGE, ""
     
     clean_url = str(url).strip()
     if not clean_url.lower().startswith("http"):
-         return row_index, col_name, "", "No Image", "Invalid URL"
+         return row_index, col_name, "", STATUS_NO_IMAGE, "Invalid URL"
 
     payload = {"url": clean_url}
     
@@ -140,15 +138,26 @@ def process_url_task(row_index, col_name, url):
             time.sleep(RETRY_DELAY)
             continue 
         except Exception as e:
-            return row_index, col_name, "", "API Error", str(e)
+            return row_index, col_name, "", STATUS_API_ERROR, str(e)
 
-# --- 🔍 Helper for Main ---
+# --- 🧩 Sub-Functions for Main (แก้ Issue Line 167) ---
+
+def _load_input_csv(filename):
+    """โหลดไฟล์ CSV และคืนค่า headers กับ rows"""
+    print(f"📂 กำลังโหลดไฟล์: {filename} ...")
+    try:
+        with open(filename, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            return reader.fieldnames, list(reader)
+    except FileNotFoundError:
+        print(f"❌ ไม่พบไฟล์ {filename}")
+        return None, None
+
 def _detect_url_columns(headers, rows_data):
-    """แยก Logic การหา Column Link ออกมาเพื่อลด Complexity ของ Main"""
+    """หาคอลัมน์ที่มี http/https"""
     print("🔎 กำลังสแกนหาคอลัมน์ที่มี Link...")
     url_columns = []
-    # เช็คแค่ 200 แถวแรกก็พอ เพื่อความเร็ว
-    check_limit = min(len(rows_data), 200) 
+    check_limit = min(len(rows_data), 200)
 
     for col in headers:
         is_url_col = False
@@ -157,73 +166,34 @@ def _detect_url_columns(headers, rows_data):
             if val.startswith("http://") or val.startswith("https://"):
                 is_url_col = True
                 break
-        
         if is_url_col:
             url_columns.append(col)
-            
     return url_columns
 
-# --- 🏁 Main Entry Point ---
-def main():
-    print("="*60)
-    # แก้ไข f-string ที่ไม่จำเป็น (Line 122 Issue)
-    print("🚀 เริ่มต้นโปรแกรม (Auto-Detect Link Columns)")
-    print("="*60)
-    
-    start_time = time.time()
-    
-    # 1. โหลดข้อมูล
-    print(f"📂 กำลังโหลดไฟล์: {INPUT_FILE} ...")
-    results_map = load_cache()
-    
-    rows_data = []
-    headers = []
-    
-    try:
-        with open(INPUT_FILE, mode='r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            headers = reader.fieldnames
-            rows_data = list(reader)
-    except FileNotFoundError:
-        print(f"❌ ไม่พบไฟล์ {INPUT_FILE}")
-        return
-
-    # 2. ค้นหาคอลัมน์ที่มี Link (เรียกใช้ Helper function)
-    url_columns = _detect_url_columns(headers, rows_data)
-
-    if not url_columns:
-        print("❌ ไม่พบคอลัมน์ที่มี Link (http/https) เลย กรุณาเช็คไฟล์ CSV")
-        return
-
-    print(f"✅ พบคอลัมน์ Link ทั้งหมด {len(url_columns)} คอลัมน์: {url_columns}")
-    
-    # 3. เตรียมงาน
+def _prepare_execution_tasks(rows_data, url_columns, results_map):
+    """เตรียม List ของงานที่ต้องทำ"""
     tasks = []
-    # เตรียม dict ล่วงหน้า
+    # เตรียม dict ล่วงหน้าเพื่อกัน key error
     for idx in range(len(rows_data)):
         if idx not in results_map:
             results_map[idx] = {}
 
     for idx, row in enumerate(rows_data):
         for col in url_columns:
+            # ข้ามงานที่เสร็จแล้ว
             if col in results_map.get(idx, {}):
                 continue
-            
             url = row.get(col, "")
             tasks.append((idx, col, url))
+    return tasks
 
+def _execute_and_track(tasks, results_map, headers, url_columns, rows_data):
+    """รัน ThreadPool และแสดงผล (แยกออกมาเพื่อลด Complexity ของ Main)"""
     total_tasks = len(tasks)
-    print(f"📌 จำนวนงานที่ต้องทำ: {total_tasks}")
-    
-    if total_tasks == 0:
-        print("🎉 ไม่มีงานเหลือให้ทำ (เสร็จหมดแล้ว)")
-        return
-
-    # 4. เริ่มรัน Multi-thread
     completed_in_session = 0
-    # แก้ไข f-string ที่ไม่จำเป็น (Line 189 Issue)
+    start_time = time.time()
+
     print("🚀 กำลังประมวลผล...")
-    
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_task = {
             executor.submit(process_url_task, r_idx, col, u): (r_idx, col) 
@@ -243,25 +213,62 @@ def main():
             }
             
             completed_in_session += 1
+            # คำนวณความเร็ว
             elapsed = time.time() - start_time
             avg_time = elapsed / completed_in_session if completed_in_session > 0 else 0.1
             eta = avg_time * (total_tasks - completed_in_session)
             
+            # Print Progress
             if i % 10 == 0 or i == total_tasks:
                 speed_txt = f"{1/avg_time:.1f}" if avg_time > 0 else "N/A"
                 print(f"⏳ [{i}/{total_tasks}] Speed: {speed_txt} img/s | ETA: {format_time(eta)} | Last: {status}")
 
+            # Auto Save
             if i % SAVE_INTERVAL == 0:
                 save_cache(results_map)
                 save_output_csv(OUTPUT_FILE, headers, url_columns, rows_data, results_map)
                 print(f"✅ Auto-Saved ({completed_in_session} done)")
 
+    return start_time # คืนค่าเวลาเริ่มเพื่อใช้คำนวณสรุป
+
+# --- 🏁 Main Entry Point ---
+def main():
+    print("="*60)
+    print("🚀 เริ่มต้นโปรแกรม (Auto-Detect Link Columns)")
+    print("="*60)
+    
+    # 1. Load Data
+    headers, rows_data = _load_input_csv(INPUT_FILE)
+    if not headers:
+        return
+
+    # 2. Detect Columns
+    url_columns = _detect_url_columns(headers, rows_data)
+    if not url_columns:
+        print("❌ ไม่พบคอลัมน์ที่มี Link (http/https) เลย")
+        return
+    print(f"✅ พบคอลัมน์ Link ทั้งหมด {len(url_columns)} คอลัมน์: {url_columns}")
+    
+    # 3. Load Cache & Prepare Tasks
+    results_map = load_cache()
+    tasks = _prepare_execution_tasks(rows_data, url_columns, results_map)
+    
+    total_tasks = len(tasks)
+    print(f"📌 จำนวนงานที่ต้องทำ: {total_tasks}")
+    
+    if total_tasks == 0:
+        print("🎉 ไม่มีงานเหลือให้ทำ (เสร็จหมดแล้ว)")
+        return
+
+    # 4. Execute Tasks (Logic ส่วนวนลูปถูกแยกออกไปแล้ว)
+    start_time = _execute_and_track(tasks, results_map, headers, url_columns, rows_data)
+
+    # 5. Final Save
     print("\n💾 บันทึกรอบสุดท้าย...")
     save_output_csv(OUTPUT_FILE, headers, url_columns, rows_data, results_map)
     
     total_time = time.time() - start_time
     print("="*60)
-    # แก้ไข f-string ที่ไม่จำเป็น (Line 226 Issue)
     print("🎉 เสร็จสมบูรณ์!")
     print(f"⏱️ ใช้เวลาทั้งหมด: {format_time(total_time)}")
     print("="*60)
